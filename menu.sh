@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================
-#   VSProxy Menu - Free
+#   VSProxy Menu - free
 # ============================================
 
 VSPROXY="/opt/vsproxy/proxy"
