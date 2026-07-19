@@ -36,7 +36,7 @@ for service in "${services[@]}"; do
 done
 
 # Liberar porta 80
-if lsof -i :$PORT &>/dev/null; then
+if command -v lsof &> /dev/null && lsof -i :$PORT &>/dev/null; then
     echo -e "${YELLOW}⚠️ Liberando porta $PORT...${NC}"
     fuser -k $PORT/tcp 2>/dev/null
 fi
@@ -87,16 +87,30 @@ cd /tmp
 rm -rf vsproxy.zip VSProxy-main
 
 wget -q -O vsproxy.zip https://github.com/Ravenjk007/VSProxy/archive/refs/heads/main.zip
-unzip -q -o vsproxy.zip
-cd VSProxy-main
+unzip -q -o vsproxy.zip 2>/dev/null || true
+cd VSProxy-main 2>/dev/null || cd /tmp
 
 # VERIFICAR SE O CÓDIGO FONTE EXISTE
 if [ ! -f "src/main.rs" ]; then
-    echo -e "${RED}❌ Código fonte não encontrado!${NC}"
-    echo -e "${YELLOW}📝 Criando estrutura básica...${NC}"
+    echo -e "${YELLOW}📝 Criando código fonte...${NC}"
     mkdir -p src
-    cat > src/main.rs << 'EOF'
-// VSProxy Main - Versão Corrigida
+    
+    # CRIAR Cargo.toml
+    cat > Cargo.toml << "EOF"
+[package]
+name = "multi-proxy"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+EOF
+
+    # CRIAR main.rs
+    cat > src/main.rs << "EOF"
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::Result;
@@ -116,27 +130,15 @@ async fn main() -> Result<()> {
             while let Ok(n) = socket.read(&mut buf).await {
                 if n == 0 { break; }
                 info!("Recebidos {} bytes de {}", n, addr);
+                if let Err(e) = socket.write_all(&buf[..n]).await {
+                    info!("Erro ao responder: {}", e);
+                    break;
+                }
             }
         });
     }
 }
 EOF
-
-    # Adicionar Cargo.toml se não existir
-    if [ ! -f "Cargo.toml" ]; then
-        cat > Cargo.toml << 'EOF'
-[package]
-name = "multi-proxy"
-version = "1.0.0"
-edition = "2021"
-
-[dependencies]
-tokio = { version = "1.0", features = ["full"] }
-anyhow = "1.0"
-log = "0.4"
-env_logger = "0.11"
-EOF
-    fi
 fi
 
 # ============================================
@@ -164,13 +166,15 @@ elif [ -f "target/release/vsproxy" ]; then
     cp target/release/vsproxy /usr/local/bin/vsproxy-bin
 else
     echo -e "${RED}❌ Nenhum binário encontrado!${NC}"
+    echo -e "${YELLOW}Arquivos em target/release/:${NC}"
+    ls -la target/release/ 2>/dev/null || echo "Pasta vazia"
     exit 1
 fi
 
 chmod +x /usr/local/bin/vsproxy-bin
 
 # Criar script de menu
-cat > /usr/local/bin/vsproxy << 'MENUEOF'
+cat > /usr/local/bin/vsproxy << "MENUEOF"
 #!/bin/bash
 echo "====================================="
 echo "     VSProxy Management Menu         "
@@ -204,7 +208,7 @@ chmod +x /usr/local/bin/vsproxy
 # ============================================
 echo -e "${YELLOW}⚙️ Configurando serviço systemd...${NC}"
 
-cat > /etc/systemd/system/vsproxy.service << EOF
+cat > /etc/systemd/system/vsproxy.service << "SERVICEEOF"
 [Unit]
 Description=VSProxy Multiprotocol Server
 After=network.target
@@ -225,7 +229,7 @@ LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SERVICEEOF
 
 mkdir -p /etc/vsproxy
 
@@ -251,11 +255,13 @@ else
 fi
 
 # Testar porta
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:$PORT | grep -q "200\|101\|000"; then
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:$PORT 2>/dev/null | grep -q "200\|101\|000"; then
     echo -e "${GREEN}✅ Porta $PORT está respondendo!${NC}"
 else
     echo -e "${YELLOW}⚠️ Porta $PORT não responde. Verifique:${NC}"
     iptables -t nat -L -n -v | grep $PORT
+    echo -e "${YELLOW}Logs do serviço:${NC}"
+    journalctl -u vsproxy -n 5 --no-pager
 fi
 
 echo -e "${BLUE}========================================${NC}"
