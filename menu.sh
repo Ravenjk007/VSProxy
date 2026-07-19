@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ============================================
-# BSProxy Menu - Free
+# VSProxy Menu - Free
 # ============================================
 
-BSPROXY="/opt/bsproxy/proxy"
-PID_FILE="/tmp/bsproxy_"
-LOG_FILE="/tmp/bsproxy_"
+BSPROXY="/opt/vsproxy/proxy"
+PID_FILE="/tmp/vsproxy_"
+LOG_FILE="/tmp/vsproxy_"
 SERVICE_DIR="/etc/systemd/system"
 
 # Cores
@@ -34,7 +34,7 @@ show_ports() {
     # Também verifica PIDs antigos
     for pidfile in ${PID_FILE}*.pid; do
         if [ -f "$pidfile" ]; then
-            PORT=$(basename "$pidfile" .pid | sed 's/bsproxy_//')
+            PORT=$(basename "$pidfile" .pid | sed 's/vsproxy_//')
             if ps -p $(cat "$pidfile") > /dev/null 2>&1; then
                 PORTS="$PORTS $PORT"
             else
@@ -112,7 +112,7 @@ open_port() {
         return
     fi
     
-    # Perguntas estilo Dtunnel
+    # Perguntas
     echo ""
     read -p "Deseja habilitar SSL? (s/n) [n]: " SSL_ENABLE
     SSL_ENABLE=${SSL_ENABLE:-n}
@@ -140,7 +140,7 @@ open_port() {
     # Criar systemd service
     cat > "${SERVICE_DIR}/proxy-${PORT}.service" << EOF
 [Unit]
-Description=BSProxy on port ${PORT}
+Description=VSProxy on port ${PORT}
 After=network.target
 
 [Service]
@@ -346,7 +346,7 @@ view_log() {
 show_menu() {
     clear
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}         BSProxy Menu              ${NC}"
+    echo -e "${CYAN}         VSProxy Menu              ${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
