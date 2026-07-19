@@ -36,7 +36,6 @@ async fn main() -> Result<()> {
 }
 
 async fn handle_connection(mut socket: TcpStream, stats: Arc<Stats>) -> Result<()> {
-    // Peek at the first byte to determine the protocol
     let mut first_byte = [0u8; 1];
     socket.read_exact(&mut first_byte).await?;
 
@@ -46,9 +45,10 @@ async fn handle_connection(mut socket: TcpStream, stats: Arc<Stats>) -> Result<(
             stats.inc_socks5();
             handle_socks5(socket).await
         }
-        b'G' | b'P' | b'C' | b'H' | b'D' | b'O' | b'T' => { // HTTP Methods (GET, POST, CONNECT, etc)
+        b'G' | b'P' | b'C' | b'H' | b'D' | b'O' | b'T' => {
             let mut headers = String::from_utf8_lossy(&[first_byte[0]]).to_string();
-            headers.push_str(&read_http_headers(&mut socket).await?);
+            let rest = read_http_headers(&mut socket).await?;
+            headers.push_str(&rest);
             
             if headers.contains("Upgrade: websocket") || extract_header(&headers, "Sec-WebSocket-Key").is_some() {
                 info!("⚡ Detected WebSocket protocol");
