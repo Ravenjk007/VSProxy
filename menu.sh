@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================
-#   VSProxy Menu - Professional Style
+#   VSProxy Menu - Free
 # ============================================
 
 VSPROXY_BIN="/usr/local/bin/vsproxy-bin"
