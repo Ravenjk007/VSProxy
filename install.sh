@@ -1,279 +1,126 @@
 #!/bin/bash
+# VSProxy Installer
+REPO_URL="https://github.com/Ravenjk007/VSProxy.git"
+REPO_BRANCH="main"
+CMD_NAME="vsproxy"
+TOTAL_STEPS=9
+CURRENT_STEP=0
 
-# VSProxy Installer Script - CORRIGIDO
-# Repository: https://github.com/Ravenjk007/VSProxy
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-PORT=80
-REDIRECT_PORT=8080
-
-echo -e "${BLUE}========================================${NC}"
-echo -e "${YELLOW}🚀 VSProxy Installer - Versão Corrigida${NC}"
-echo -e "${BLUE}========================================${NC}"
-
-# Verificar se o usuário é root
-if [ "$EUID" -ne 0 ]; then 
-    echo -e "${RED}❌ Por favor, execute como root (sudo).${NC}"
-    exit 1
-fi
-
-# ============================================
-# 1. PARAR SERVIÇOS CONFLITANTES
-# ============================================
-echo -e "${YELLOW}🔍 Parando serviços conflitantes...${NC}"
-services=("apache2" "nginx" "lighttpd" "httpd")
-for service in "${services[@]}"; do
-    if systemctl is-active --quiet $service 2>/dev/null; then
-        echo -e "${YELLOW}⚠️ Parando $service...${NC}"
-        systemctl stop $service
-        systemctl disable $service
-    fi
-done
-
-# Liberar porta 80
-if command -v lsof &> /dev/null && lsof -i :$PORT &>/dev/null; then
-    echo -e "${YELLOW}⚠️ Liberando porta $PORT...${NC}"
-    fuser -k $PORT/tcp 2>/dev/null
-fi
-
-# ============================================
-# 2. INSTALAR DEPENDÊNCIAS
-# ============================================
-echo -e "${YELLOW}📦 Instalando dependências...${NC}"
-apt-get update -qq
-apt-get install -y -qq curl wget zip unzip build-essential pkg-config libssl-dev iptables net-tools lsof
-
-# ============================================
-# 3. INSTALAR RUST
-# ============================================
-if ! command -v cargo &> /dev/null; then
-    echo -e "${YELLOW}🦀 Rust não encontrado. Instalando...${NC}"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source $HOME/.cargo/env
-else
-    echo -e "${GREEN}✅ Rust já está instalado.${NC}"
-fi
-
-# ============================================
-# 4. CONFIGURAR REDIRECIONAMENTO DE PORTA
-# ============================================
-echo -e "${YELLOW}🔧 Configurando redirecionamento $PORT → $REDIRECT_PORT...${NC}"
-
-# Limpar regras antigas
-iptables -t nat -D PREROUTING -p tcp --dport $PORT -j REDIRECT --to-port $REDIRECT_PORT 2>/dev/null
-iptables -t nat -D OUTPUT -p tcp --dport $PORT -j REDIRECT --to-port $REDIRECT_PORT 2>/dev/null
-
-# Adicionar novas regras
-iptables -t nat -A PREROUTING -p tcp --dport $PORT -j REDIRECT --to-port $REDIRECT_PORT
-iptables -t nat -A OUTPUT -p tcp --dport $PORT -j REDIRECT --to-port $REDIRECT_PORT
-
-# Salvar regras
-mkdir -p /etc/iptables
-iptables-save > /etc/iptables/rules.v4
-
-echo -e "${GREEN}✅ Redirecionamento configurado!${NC}"
-
-# ============================================
-# 5. BAIXAR E COMPILAR
-# ============================================
-echo -e "${YELLOW}📥 Baixando código fonte do GitHub...${NC}"
-mkdir -p /etc/vsproxy
-cd /tmp
-rm -rf vsproxy.zip VSProxy-main
-
-wget -q -O vsproxy.zip https://github.com/Ravenjk007/VSProxy/archive/refs/heads/main.zip
-unzip -q -o vsproxy.zip 2>/dev/null || true
-cd VSProxy-main 2>/dev/null || cd /tmp
-
-# VERIFICAR SE O CÓDIGO FONTE EXISTE
-if [ ! -f "src/main.rs" ]; then
-    echo -e "${YELLOW}📝 Criando código fonte...${NC}"
-    mkdir -p src
-    
-    # CRIAR Cargo.toml
-    cat > Cargo.toml << "EOF"
-[package]
-name = "multi-proxy"
-version = "1.0.0"
-edition = "2021"
-
-[dependencies]
-tokio = { version = "1.0", features = ["full"] }
-anyhow = "1.0"
-log = "0.4"
-env_logger = "0.11"
-EOF
-
-    # CRIAR main.rs
-    cat > src/main.rs << "EOF"
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use anyhow::Result;
-use log::info;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    env_logger::init();
-    let listener = TcpListener::bind("0.0.0.0:8080").await?;
-    info!("🚀 VSProxy rodando na porta 8080 (redirecionada para 80)");
-    
-    loop {
-        let (mut socket, addr) = listener.accept().await?;
-        tokio::spawn(async move {
-            info!("Nova conexão de: {}", addr);
-            let mut buf = [0; 1024];
-            while let Ok(n) = socket.read(&mut buf).await {
-                if n == 0 { break; }
-                info!("Recebidos {} bytes de {}", n, addr);
-                if let Err(e) = socket.write_all(&buf[..n]).await {
-                    info!("Erro ao responder: {}", e);
-                    break;
-                }
-            }
-        });
-    }
+show_progress() {
+    PERCENT=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+    echo "Progresso: [${PERCENT}%] - $1"
 }
-EOF
-fi
 
-# ============================================
-# 6. COMPILAR
-# ============================================
-echo -e "${YELLOW}🛠️ Compilando VSProxy (isso pode levar alguns minutos)...${NC}"
-cargo build --release
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Erro na compilação!${NC}"
-    echo -e "${YELLOW}🔄 Tentando corrigir...${NC}"
-    cargo fix --allow-dirty
-    cargo build --release
-fi
-
-# ============================================
-# 7. INSTALAR BINÁRIOS
-# ============================================
-echo -e "${YELLOW}📦 Instalando binários...${NC}"
-
-# Verificar qual binário foi gerado
-if [ -f "target/release/multi-proxy" ]; then
-    cp target/release/multi-proxy /usr/local/bin/vsproxy-bin
-elif [ -f "target/release/vsproxy" ]; then
-    cp target/release/vsproxy /usr/local/bin/vsproxy-bin
-else
-    echo -e "${RED}❌ Nenhum binário encontrado!${NC}"
-    echo -e "${YELLOW}Arquivos em target/release/:${NC}"
-    ls -la target/release/ 2>/dev/null || echo "Pasta vazia"
+error_exit() {
+    echo -e "\nErro: $1"
     exit 1
-fi
+}
 
-chmod +x /usr/local/bin/vsproxy-bin
+increment_step() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+}
 
-# Criar script de menu
-cat > /usr/local/bin/vsproxy << "MENUEOF"
-#!/bin/bash
-echo "====================================="
-echo "     VSProxy Management Menu         "
-echo "====================================="
-echo "1. Status do serviço"
-echo "2. Reiniciar serviço"
-echo "3. Parar serviço"
-echo "4. Ver logs"
-echo "5. Testar conexão na porta 80"
-echo "6. Ver regras de firewall"
-echo "7. Sair"
-echo "====================================="
-read -p "Escolha uma opção: " option
-
-case $option in
-    1) systemctl status vsproxy --no-pager ;;
-    2) systemctl restart vsproxy && echo "✅ Serviço reiniciado" ;;
-    3) systemctl stop vsproxy && echo "⏹️ Serviço parado" ;;
-    4) journalctl -u vsproxy -f ;;
-    5) curl -I http://localhost:80 ;;
-    6) iptables -t nat -L -n -v | grep 80 ;;
-    7) exit ;;
-    *) echo "Opção inválida" ;;
-esac
-MENUEOF
-
-chmod +x /usr/local/bin/vsproxy
-
-# ============================================
-# 8. CONFIGURAR SYSTEMD
-# ============================================
-echo -e "${YELLOW}⚙️ Configurando serviço systemd...${NC}"
-
-cat > /etc/systemd/system/vsproxy.service << "SERVICEEOF"
-[Unit]
-Description=VSProxy Multiprotocol Server
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-User=root
-Group=root
-WorkingDirectory=/etc/vsproxy
-ExecStart=/usr/local/bin/vsproxy-bin
-Restart=always
-RestartSec=3
-StandardOutput=journal
-StandardError=journal
-Environment=RUST_LOG=info
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-SERVICEEOF
-
-mkdir -p /etc/vsproxy
-
-# ============================================
-# 9. INICIAR SERVIÇO
-# ============================================
-systemctl daemon-reload
-systemctl enable vsproxy
-systemctl restart vsproxy
-
-# ============================================
-# 10. VERIFICAR INSTALAÇÃO
-# ============================================
-echo -e "${YELLOW}🔍 Verificando instalação...${NC}"
-sleep 3
-
-if systemctl is-active --quiet vsproxy; then
-    echo -e "${GREEN}✅ Serviço está rodando!${NC}"
+if [ "$EUID" -ne 0 ]; then
+    error_exit "EXECUTE COMO ROOT"
 else
-    echo -e "${RED}❌ Serviço não está rodando!${NC}"
-    echo -e "${YELLOW}Últimos logs:${NC}"
-    journalctl -u vsproxy -n 10 --no-pager
-fi
+    clear
+    show_progress "Atualizando repositorios..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt update -y > /dev/null 2>&1 || error_exit "Falha ao atualizar os repositorios"
+    increment_step
 
-# Testar porta
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:$PORT 2>/dev/null | grep -q "200\|101\|000"; then
-    echo -e "${GREEN}✅ Porta $PORT está respondendo!${NC}"
-else
-    echo -e "${YELLOW}⚠️ Porta $PORT não responde. Verifique:${NC}"
-    iptables -t nat -L -n -v | grep $PORT
-    echo -e "${YELLOW}Logs do serviço:${NC}"
-    journalctl -u vsproxy -n 5 --no-pager
-fi
+    show_progress "Verificando o sistema..."
+    if ! command -v lsb_release &> /dev/null; then
+        apt install lsb-release -y > /dev/null 2>&1 || error_exit "Falha ao instalar lsb-release"
+    fi
+    increment_step
 
-echo -e "${BLUE}========================================${NC}"
-echo -e "${GREEN}✅ VSProxy instalado com sucesso!${NC}"
-echo -e "${BLUE}========================================${NC}"
-echo -e "📌 Serviço: ${GREEN}vsproxy${NC}"
-echo -e "📌 Porta: ${GREEN}$PORT (redirecionada para $REDIRECT_PORT)${NC}"
-echo -e "📌 Status: ${GREEN}$(systemctl is-active vsproxy)${NC}"
-echo -e ""
-echo -e "${YELLOW}Comandos úteis:${NC}"
-echo -e "  • Menu: ${GREEN}vsproxy${NC}"
-echo -e "  • Logs: ${GREEN}journalctl -u vsproxy -f${NC}"
-echo -e "  • Status: ${GREEN}systemctl status vsproxy${NC}"
-echo -e "  • Testar: ${GREEN}curl -I http://localhost:$PORT${NC}"
-echo -e "${BLUE}========================================${NC}"
+    OS_NAME=$(lsb_release -is)
+    VERSION=$(lsb_release -rs)
+    case $OS_NAME in
+        Ubuntu)
+            case $VERSION in
+                24.*|22.*|20.*|18.*) show_progress "Sistema Ubuntu suportado, continuando..." ;;
+                *) error_exit "Versão do Ubuntu não suportada. Use 18, 20, 22 ou 24." ;;
+            esac
+            ;;
+        Debian)
+            case $VERSION in
+                12*|11*|10*|9*) show_progress "Sistema Debian suportado, continuando..." ;;
+                *) error_exit "Versão do Debian não suportada. Use 9, 10, 11 ou 12." ;;
+            esac
+            ;;
+        *) error_exit "Sistema não suportado. Use Ubuntu ou Debian." ;;
+    esac
+    increment_step
+
+    show_progress "Atualizando o sistema..."
+    apt upgrade -y > /dev/null 2>&1 || error_exit "Falha ao atualizar o sistema"
+    apt-get install curl build-essential git -y > /dev/null 2>&1 || error_exit "Falha ao instalar pacotes"
+    increment_step
+
+    show_progress "Criando diretorio /opt/vsproxy..."
+    mkdir -p /opt/vsproxy > /dev/null 2>&1
+    increment_step
+
+    show_progress "Instalando Rust..."
+    if ! command -v rustc &> /dev/null; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y > /dev/null 2>&1 || error_exit "Falha ao instalar Rust"
+        source "$HOME/.cargo/env"
+    fi
+    increment_step
+
+    show_progress "Compilando VSProxy, isso pode levar algum tempo..."
+    if [ -d "/root/VSProxy" ]; then
+        rm -rf /root/VSProxy
+    fi
+    git clone --branch "$REPO_BRANCH" "$REPO_URL" /root/VSProxy > /dev/null 2>&1 || error_exit "Falha ao clonar VSProxy"
+
+    if [ -f /root/VSProxy/menu.sh ]; then
+        cp /root/VSProxy/menu.sh /opt/vsproxy/menu
+        chmod +x /opt/vsproxy/menu
+    fi
+
+    cd /root/VSProxy || error_exit "Diretório do VSProxy não encontrado"
+    cargo build --release --jobs "$(nproc)" > /dev/null 2>&1 || error_exit "Falha ao compilar VSProxy"
+
+    if [ -f ./target/release/vsproxy ]; then
+        mv ./target/release/vsproxy /opt/vsproxy/proxy || error_exit "Binário compilado não encontrado"
+        chmod +x /opt/vsproxy/proxy
+    else
+        error_exit "Binário 'vsproxy' não encontrado após compilação"
+    fi
+    increment_step
+
+    show_progress "Configurando permissões..."
+    chmod +x /opt/vsproxy/proxy
+    [ -f /opt/vsproxy/menu ] && chmod +x /opt/vsproxy/menu
+
+    # Criar o link usando cp (mais confiável)
+    if [ -f /opt/vsproxy/menu ]; then
+        cp /opt/vsproxy/menu /usr/local/bin/vsproxy
+    else
+        cp /opt/vsproxy/proxy /usr/local/bin/vsproxy
+    fi
+    chmod +x /usr/local/bin/vsproxy
+    increment_step
+
+    show_progress "Limpando diretórios temporários..."
+    cd /root/
+    rm -rf /root/VSProxy/
+    increment_step
+
+    echo ""
+    echo -e "\033[0;32m✅ Instalação concluída com sucesso!\033[0m"
+    echo ""
+    echo "🚀 Digite 'vsproxy' para acessar o menu."
+    echo "   Ou 'vsproxy -p 80' para abrir porta 80 diretamente."
+    echo ""
+    echo "📡 Protocolos suportados:"
+    echo "   - SOCKS5 (byte 0x05)"
+    echo "   - TLS/SECURITY (byte 0x16)"
+    echo "   - WebSocket (GET / ou HTTP/)"
+    echo "   - SECURITY (AUTH ou SECURITY)"
+    echo "   - TCP Fallback (qualquer outro)"
+    echo ""
+fi
