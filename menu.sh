@@ -79,7 +79,7 @@ stop_port() {
         rm -f "${PID_FILE}${PORT}.pid"
     fi
     # Mata processos diretos
-    pkill -f "bsproxy -p ${PORT}" 2>/dev/null
+    pkill -f "vsproxy -p ${PORT}" 2>/dev/null
 }
 
 # ============================================
@@ -270,7 +270,7 @@ open_port_restart() {
     # Criar systemd service
     cat > "${SERVICE_DIR}/proxy-${PORT}.service" << EOF
 [Unit]
-Description=BSProxy on port ${PORT}
+Description=VSProxy on port ${PORT}
 After=network.target
 
 [Service]
@@ -320,7 +320,7 @@ view_log() {
         return
     fi
     
-    LOG_FILE="/tmp/bsproxy_${PORT}.log"
+    LOG_FILE="/tmp/vsproxy_${PORT}.log"
     
     if [ -f "$LOG_FILE" ]; then
         echo -e "${CYAN}📋 Log da porta ${PORT}:${NC}"
