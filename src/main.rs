@@ -5,12 +5,14 @@ mod tcp_fallback;
 mod security;
 
 use tokio::net::TcpListener;
+use tokio::io::AsyncReadExt;
 use clap::Parser;
 use anyhow::Result;
 use log::{info, error};
+use std::process::Command;
 
 #[derive(Parser)]
-#[command(name = "vsproxy")]
+#[command(name = "bsproxy")]
 #[command(about = "Multiprotocol proxy server")]
 struct Cli {
     #[arg(short = 'p', long = "port", default_value = "8080")]
@@ -33,7 +35,7 @@ async fn main() -> Result<()> {
     
     let addr = format!("0.0.0.0:{}", cli.port);
     let listener = TcpListener::bind(&addr).await?;
-    info!("🚀 VSProxy listening on {}", addr);
+    info!("🚀 BSProxy listening on {}", addr);
     info!("📡 Protocols: SOCKS5, TLS, WebSocket, SECURITY, TCP");
 
     while let Ok((socket, _)) = listener.accept().await {
