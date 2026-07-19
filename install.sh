@@ -44,7 +44,11 @@ echo -e "${YELLOW}🛠️ Compilando VSProxy (isso pode levar alguns minutos)...
 cargo build --release
 
 # Mover binário para o sistema
-cp target/release/multi-proxy /usr/local/bin/vsproxy
+cp target/release/multi-proxy /usr/local/bin/vsproxy-bin
+chmod +x /usr/local/bin/vsproxy-bin
+
+# Configurar o script de menu como comando principal 'vsproxy'
+cp menu.sh /usr/local/bin/vsproxy
 chmod +x /usr/local/bin/vsproxy
 
 # Criar arquivo de serviço systemd
@@ -58,7 +62,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/etc/vsproxy
-ExecStart=/usr/local/bin/vsproxy
+ExecStart=/usr/local/bin/vsproxy-bin
 Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
@@ -72,6 +76,5 @@ systemctl daemon-reload
 systemctl enable vsproxy
 systemctl start vsproxy
 
-echo -e "${GREEN}✅ VSProxy instalado e rodando com sucesso!${NC}"
-echo -e "${YELLOW}Estatísticas: journalctl -u vsproxy -f${NC}"
-echo -e "${YELLOW}Porta padrão: 8080${NC}"
+echo -e "${GREEN}✅ VSProxy instalado com sucesso!${NC}"
+echo -e "${YELLOW}Digite 'vsproxy' para abrir o menu de gerenciamento.${NC}"
