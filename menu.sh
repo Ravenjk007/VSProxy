@@ -19,7 +19,7 @@ show_menu() {
     [ -z "$ports" ] && ports="nenhuma"
 
     echo "================= @VSManager ================="
-    echo "|                 VSPROXY                       |"
+    echo "|                 VSPROXY                      |"
     echo "------------------------------------------------"
     echo "| Porta(s): $ports"
     echo "------------------------------------------------"
@@ -44,20 +44,20 @@ open_port() {
         return
     fi
 
-    cat > "/etc/systemd/system/${service}" <<SERVICEEOF
+    cat > "/etc/systemd/system/${service}" <<EOF
 [Unit]
 Description=VSProxy na porta ${port}
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${PROXY_BIN} --port ${port}
+ExecStart=${PROXY_BIN} --port ${port} --status "${DEFAULT_STATUS}" --target ${DEFAULT_TARGET}
 Restart=always
 RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
-SERVICEEOF
+EOF
 
     systemctl daemon-reload
     systemctl enable "${service}" > /dev/null 2>&1
