@@ -1,12 +1,12 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::Result;
-use log::{info, error, warn};
+use log::info;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use sha1::{Sha1, Digest};
 use base64::{engine::general_purpose, Engine as _};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 
 // ============================================
 // ESTATÍSTICAS (MULTISTATUS)
@@ -112,7 +112,7 @@ async fn handle_socks5(mut socket: TcpStream) -> Result<()> {
     };
     let port = socket.read_u16().await?;
     let target = format!("{}:{}", target_addr, port);
-    
+
     match TcpStream::connect(&target).await {
         Ok(remote) => {
             socket.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
@@ -164,8 +164,27 @@ async fn proxy_bridge(socket: TcpStream, remote: TcpStream) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    let listener = TcpListener::bind("0.0.0.0:8080").await?;
-    info!("🚀 VSProxy Unified Server listening on 8080");
+
+    // Porta configurável via variável de ambiente PROXY_PORT.
+    // Se não definida, usa 8080 como padrão.
+    let port: u16 = std::env::var("PROXY_PORT")
+        .unwrap_or_else(|_| "8080".to_string())
+        .parse()
+        .unwrap_or(8080);
+
+    let bind_addr = format!("0.0.0.0:{}", port);
+
+    let listener = match TcpListener::bind(&bind_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("❌ Falha ao abrir a porta {}: {}", port, e);
+            eprintln!("Dica: portas < 1024 exigem root ou a capability cap_net_bind_service.");
+            eprintln!("Rode: sudo setcap 'cap_net_bind_service=+ep' /caminho/do/binario");
+            std::process::exit(1);
+        }
+    };
+
+    info!("🚀 VSProxy Unified Server listening on {}", bind_addr);
     let stats = Arc::new(Stats::new());
 
     loop {
