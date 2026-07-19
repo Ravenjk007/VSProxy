@@ -1,19 +1,20 @@
 [package]
-name = "multi-proxy"
+name = "vsproxy"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.36", features = ["full"] }
+tokio = { version = "1.35", features = ["full"] }
+rustls = "0.21"
+tokio-rustls = "0.24"
+rcgen = "0.11"
 anyhow = "1.0"
 log = "0.4"
-env_logger = "0.11"
+env_logger = "0.10"
+clap = { version = "4.4", features = ["derive"] }
 sha1 = "0.10"
 base64 = "0.22"
-bytes = "1.5"
-uuid = { version = "1.7", features = ["v4"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-futures-util = "0.3"
-dashmap = "5.5"
-lazy_static = "1.4"
+
+[[bin]]
+name = "vsproxy"
+path = "src/main.rs"
