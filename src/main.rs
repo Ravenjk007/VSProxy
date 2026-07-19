@@ -1,86 +1,91 @@
-mod socks5;
-mod tls;
-mod websocket;
-mod tcp_fallback;
-mod security;
+use std::env;
+use tokio::net::{TcpListener, TcpStream};
 
-use tokio::net::TcpListener;
-use tokio::io::AsyncReadExt;
-use clap::Parser;
-use anyhow::Result;
-use log::{info, error};
-use std::process::Command;
+mod socks;
+mod wsproxy;
 
-#[derive(Parser)]
-#[command(name = "bsproxy")]
-#[command(about = "Multiprotocol proxy server")]
-struct Cli {
-    #[arg(short = 'p', long = "port", default_value = "8080")]
-    port: u16,
-    #[arg(short = 'd', long = "debug")]
-    debug: bool,
+/// Configuração global do proxy, lida a partir dos argumentos de linha de comando.
+#[derive(Clone)]
+pub struct Config {
+    pub port: u16,
+    pub status: String,         // texto enviado na resposta HTTP fake (ex: "@VSProxy")
+    pub default_target: String, // destino padrão pros modos websocket/direct (ex: SSH local)
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    
-    if cli.debug {
-        env_logger::init();
-    } else {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .init();
-    }
-    
-    let addr = format!("0.0.0.0:{}", cli.port);
-    let listener = TcpListener::bind(&addr).await?;
-    info!("🚀 BSProxy listening on {}", addr);
-    info!("📡 Protocols: SOCKS5, TLS, WebSocket, SECURITY, TCP");
+async fn main() {
+    let config = parse_args();
 
-    while let Ok((socket, _)) = listener.accept().await {
+    let listener = TcpListener::bind(("0.0.0.0", config.port))
+        .await
+        .expect("Falha ao abrir a porta. Ela já está em uso?");
+
+    println!("VSProxy escutando na porta {}", config.port);
+    println!("Destino padrão: {}", config.default_target);
+
+    loop {
+        let (socket, addr) = match listener.accept().await {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Erro ao aceitar conexão: {}", e);
+                continue;
+            }
+        };
+
+        let cfg = config.clone();
         tokio::spawn(async move {
-            let mut buf = [0u8; 24];
-            match socket.peek(&mut buf).await {
-                Ok(n) if n > 0 => {
-                    match buf[0] {
-                        0x05 => {
-                            info!("🔐 SOCKS5");
-                            let _ = socks5::handle_socks5(socket).await;
-                        }
-                        0x16 => {
-                            info!("🔒 TLS");
-                            let _ = tls::handle_tls(socket).await;
-                        }
-                        _ => {
-                            let data_str = String::from_utf8_lossy(&buf[..n]);
-                            // Verifica se é uma requisição HTTP (qualquer método)
-                            if data_str.starts_with("GET ") || 
-                               data_str.starts_with("POST ") || 
-                               data_str.starts_with("PUT ") || 
-                               data_str.starts_with("DELETE ") || 
-                               data_str.starts_with("PATCH ") || 
-                               data_str.starts_with("HEAD ") || 
-                               data_str.starts_with("CONNECT ") || 
-                               data_str.starts_with("OPTIONS ") || 
-                               data_str.starts_with("TRACE ") || 
-                               data_str.starts_with("HTTP/") {
-                                info!("🌐 WebSocket/HTTP");
-                                let _ = websocket::handle_websocket(socket).await;
-                            } else if data_str.starts_with("SECURITY") || data_str.starts_with("AUTH") {
-                                info!("🔐 SECURITY");
-                                let _ = security::handle_security(socket).await;
-                            } else {
-                                info!("📦 TCP");
-                                let _ = tcp_fallback::handle_tcp(socket).await;
-                            }
-                        }
-                    }
-                }
-                Ok(_) => info!("Connection closed"),
-                Err(e) => error!("Peek error: {}", e),
+            if let Err(e) = handle_client(socket, cfg).await {
+                eprintln!("Conexão de {} encerrada: {}", addr, e);
             }
         });
     }
-    Ok(())
+}
+
+/// Lê argumentos como: --port 80 --status "@VSProxy" --target 127.0.0.1:22
+fn parse_args() -> Config {
+    let args: Vec<String> = env::args().collect();
+
+    let mut port: u16 = 80;
+    let mut status = "@VSProxy".to_string();
+    let mut default_target = "127.0.0.1:22".to_string();
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--port" => {
+                port = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(port);
+                i += 2;
+            }
+            "--status" => {
+                status = args.get(i + 1).cloned().unwrap_or(status);
+                i += 2;
+            }
+            "--target" => {
+                default_target = args.get(i + 1).cloned().unwrap_or(default_target);
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    Config { port, status, default_target }
+}
+
+/// Decide qual protocolo tratar de acordo com os primeiros bytes recebidos.
+async fn handle_client(socket: TcpStream, cfg: Config) -> std::io::Result<()> {
+    let mut peek_buf = [0u8; 8];
+    let n = socket.peek(&mut peek_buf).await?;
+
+    if n >= 1 && peek_buf[0] == 0x05 {
+        // Primeiro byte 0x05 = início de handshake SOCKS5
+        socks::handle_socks5(socket).await
+    } else if n >= 3 && &peek_buf[0..3] == b"GET" {
+        // Parece uma requisição HTTP -> tratamos como upgrade Websocket
+        wsproxy::handle_websocket(socket, &cfg).await
+    } else {
+        // Qualquer outra coisa: modo "security" (resposta direta, sem esperar handshake)
+        wsproxy::handle_direct(socket, &cfg).await
+    }
 }
