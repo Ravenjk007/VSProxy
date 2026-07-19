@@ -106,7 +106,7 @@ open_port() {
         return
     fi
     
-    if [ ! -f "$BSPROXY" ]; then
+    if [ ! -f "$VSPROXY" ]; then
         echo -e "${RED}❌ BSProxy não encontrado em $BSPROXY${NC}"
         sleep 3
         return
