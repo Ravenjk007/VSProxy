@@ -8,7 +8,7 @@ mod wsproxy;
 #[derive(Clone)]
 pub struct Config {
     pub port: u16,
-    pub status: String,         // texto enviado na resposta HTTP fake (ex: "@VSProxy")
+    pub status: String,         // texto enviado na resposta HTTP fake (ex: "@BSProxy")
     pub default_target: String, // destino padrão pros modos websocket/direct (ex: SSH local)
 }
 
@@ -20,7 +20,7 @@ async fn main() {
         .await
         .expect("Falha ao abrir a porta. Ela já está em uso?");
 
-    println!("VSProxy escutando na porta {}", config.port);
+    println!("BSProxy escutando na porta {}", config.port);
     println!("Destino padrão: {}", config.default_target);
 
     loop {
@@ -41,12 +41,12 @@ async fn main() {
     }
 }
 
-/// Lê argumentos como: --port 80 --status "@VSProxy" --target 127.0.0.1:22
+/// Lê argumentos como: --port 80 --status "@BSProxy" --target 127.0.0.1:22
 fn parse_args() -> Config {
     let args: Vec<String> = env::args().collect();
 
     let mut port: u16 = 80;
-    let mut status = "@VSProxy".to_string();
+    let mut status = "@BSProxy".to_string();
     let mut default_target = "127.0.0.1:22".to_string();
 
     let mut i = 1;
