@@ -1,6 +1,21 @@
 [package]
-name = "VSProxy"
+name = "vsproxy"
+version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["io-util", "net", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.35", features = ["full"] }
+hyper = { version = "0.14", features = ["full"] }
+rustls = "0.21"
+tokio-rustls = "0.24"
+rcgen = "0.11"
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.10"
+clap = { version = "4.4", features = ["derive"] }
+sha1 = "0.10"
+base64 = "0.22"
+
+[[bin]]
+name = "vsproxy"
+path = "src/main.rs"
