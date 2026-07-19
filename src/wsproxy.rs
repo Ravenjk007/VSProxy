@@ -2,16 +2,16 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use std::io;
+use std::collections::HashMap;
 use log::{info, warn, error};
 use sha1::{Sha1, Digest};
 use base64::{engine::general_purpose, Engine as _};
 use crate::Config;
 
 const WS_MAGIC: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const HTTP_RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
 
 /// Lê headers HTTP até \r\n\r\n
-async fn read_http_headers(socket: &mut TcpStream) -> io::Result<String> {
+async fn read_http_headers(socket: &mut TcpStream) -> io::Result<(String, HashMap<String, String>)> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1];
     loop {
@@ -20,21 +20,31 @@ async fn read_http_headers(socket: &mut TcpStream) -> io::Result<String> {
         if buf.len() >= 4 && &buf[buf.len() - 4..] == b"\r\n\r\n" {
             break;
         }
-        if buf.len() > 8192 {
+        if buf.len() > 16384 {
             break;
         }
     }
-    Ok(String::from_utf8_lossy(&buf).to_string())
+    
+    let headers_str = String::from_utf8_lossy(&buf).to_string();
+    let mut headers_map = HashMap::new();
+    
+    for line in headers_str.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            headers_map.insert(
+                key.trim().to_lowercase(),
+                value.trim().to_string()
+            );
+        }
+    }
+    
+    Ok((headers_str, headers_map))
 }
 
-/// Extrai valor de header
-fn extract_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
-    let name_lower = name.to_lowercase();
-    for line in headers.lines() {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().to_lowercase() == name_lower {
-                return Some(v.trim());
-            }
+/// Extrai método da primeira linha
+fn extract_method(headers: &str) -> Option<String> {
+    if let Some(first_line) = headers.lines().next() {
+        if let Some(method) = first_line.split_whitespace().next() {
+            return Some(method.to_uppercase());
         }
     }
     None
@@ -49,42 +59,9 @@ fn compute_accept_key(client_key: &str) -> String {
     general_purpose::STANDARD.encode(result)
 }
 
-/// Tipos de requisição
-#[derive(Debug, PartialEq)]
-pub enum RequestType {
-    WebSocket,
-    Http11,
-    Http2,
-    Grpc,
-    Unknown,
-}
-
-/// Analisa tipo de requisição
-pub fn analyze_request(headers: &str) -> RequestType {
-    // WebSocket
-    if let Some(upgrade) = extract_header(headers, "Upgrade") {
-        if upgrade.to_lowercase() == "websocket" && extract_header(headers, "Sec-WebSocket-Key").is_some() {
-            return RequestType::WebSocket;
-        }
-    }
-    
-    // gRPC
-    if extract_header(headers, "Content-Type").map_or(false, |ct| ct.contains("application/grpc")) {
-        return RequestType::Grpc;
-    }
-    
-    // HTTP/2
-    if extract_header(headers, "HTTP-Version").map_or(false, |v| v.contains("2.")) {
-        return RequestType::Http2;
-    }
-    
-    // HTTP/1.1 padrão
-    if headers.starts_with("GET") || headers.starts_with("POST") || 
-       headers.starts_with("PUT") || headers.starts_with("DELETE") {
-        return RequestType::Http11;
-    }
-    
-    RequestType::Unknown
+/// Verifica se o método é permitido
+fn is_method_allowed(method: &str, cfg: &Config) -> bool {
+    cfg.allow_methods.iter().any(|m| m.eq_ignore_ascii_case(method))
 }
 
 /// Conecta ao destino com suporte VPN
@@ -92,7 +69,6 @@ pub async fn connect_with_vpn(target: &str, cfg: &Config) -> io::Result<TcpStrea
     if cfg.vpn_enabled {
         info!("🔐 Conectando via VPN: {}", cfg.vpn_bind);
         
-        // Se tiver proxy, usa ele
         if let Some(proxy) = &cfg.vpn_proxy {
             info!("🔗 Via proxy: {}", proxy);
             let proxy_addr = proxy.parse().map_err(|e| {
@@ -101,24 +77,46 @@ pub async fn connect_with_vpn(target: &str, cfg: &Config) -> io::Result<TcpStrea
             return TcpStream::connect(proxy_addr).await;
         }
         
-        // Conexão normal (bind seria feito no socket em implementação real)
         return TcpStream::connect(target).await;
     }
     
     TcpStream::connect(target).await
 }
 
-/// Handle WebSocket com suporte multiprotocolo
-pub async fn handle_multiprotocol_websocket(mut socket: TcpStream, cfg: &Config) -> io::Result<()> {
-    info!("🌐 Processando requisição multi-protocolo...");
+/// Handle requisição multiprotocolo com suporte a múltiplos métodos HTTP
+pub async fn handle_multiprotocol_request(
+    mut socket: TcpStream,
+    cfg: &Config,
+    method: &str,
+) -> io::Result<()> {
+    info!("📨 Método HTTP detectado: {}", method);
     
-    let headers = read_http_headers(&mut socket).await?;
-    let request_type = analyze_request(&headers);
-    info!("📡 Tipo: {:?}", request_type);
+    // Verifica se o método é permitido
+    if !is_method_allowed(method, cfg) {
+        let response = format!(
+            "HTTP/1.1 405 Method Not Allowed\r\n\
+             Allow: {}\r\n\
+             Content-Length: 0\r\n\
+             \r\n",
+            cfg.allow_methods.join(", ")
+        );
+        socket.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
     
-    // Resposta com suporte multiprotocolo
-    if request_type == RequestType::WebSocket {
-        let client_key = extract_header(&headers, "Sec-WebSocket-Key")
+    let (headers_str, headers_map) = read_http_headers(&mut socket).await?;
+    
+    // Detecção de WebSocket
+    let is_websocket = headers_map
+        .get("upgrade")
+        .map(|v| v.to_lowercase() == "websocket")
+        .unwrap_or(false)
+        && headers_map.contains_key("sec-websocket-key");
+    
+    if is_websocket && method == "GET" {
+        // Handshake WebSocket
+        let client_key = headers_map
+            .get("sec-websocket-key")
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Chave WebSocket faltando"))?;
         
         let accept_key = compute_accept_key(client_key);
@@ -128,9 +126,11 @@ pub async fn handle_multiprotocol_websocket(mut socket: TcpStream, cfg: &Config)
              Connection: Upgrade\r\n\
              Sec-WebSocket-Accept: {}\r\n\
              X-Protocol-Support: websocket,http11,http2,grpc\r\n\
+             X-Allowed-Methods: {}\r\n\
              X-Multistatus: 207 Multi-Status\r\n\
              \r\n",
-            accept_key
+            accept_key,
+            cfg.allow_methods.join(", ")
         );
         
         socket.write_all(response.as_bytes()).await?;
@@ -150,46 +150,42 @@ pub async fn handle_multiprotocol_websocket(mut socket: TcpStream, cfg: &Config)
         )?;
         
         info!("🔚 Conexão encerrada");
-        Ok(())
-    } else {
-        // Resposta para outros protocolos
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-             Content-Type: text/plain\r\n\
-             Content-Length: 60\r\n\
-             X-Protocol-Support: websocket,http11,http2,grpc\r\n\
-             X-Multistatus: 207 Multi-Status\r\n\
-             \r\n\
-             Protocolo detectado: {:?}. Use WebSocket para conexão SSH.",
-            request_type
-        );
-        
-        socket.write_all(response.as_bytes()).await?;
-        info!("📨 Resposta multiprotocolo enviada");
-        Ok(())
+        return Ok(());
     }
-}
-
-/// Handle HTTP com suporte multiprotocolo
-pub async fn handle_multiprotocol_http(mut socket: TcpStream, cfg: &Config) -> io::Result<()> {
-    let headers = read_http_headers(&mut socket).await?;
-    let request_type = analyze_request(&headers);
     
-    info!("📡 Requisição HTTP: {:?}", request_type);
+    // Resposta para métodos HTTP
+    let content = format!(
+        "Método: {}\n\
+         Protocolo: HTTP/1.1\n\
+         VPN: {}\n\
+         Métodos permitidos: {}\n\
+         Headers recebidos: {}",
+        method,
+        if cfg.vpn_enabled { "Ativada" } else { "Desativada" },
+        cfg.allow_methods.join(", "),
+        headers_map.len()
+    );
     
     let response = format!(
         "HTTP/1.1 200 OK\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: 100\r\n\
+         Content-Type: text/plain\r\n\
+         Content-Length: {}\r\n\
          X-Protocol-Support: websocket,http11,http2,grpc\r\n\
+         X-Allowed-Methods: {}\r\n\
          X-Multistatus: 207 Multi-Status\r\n\
+         X-Method: {}\r\n\
+         X-VPN-Enabled: {}\r\n\
          \r\n\
-         {{ \"protocol\": \"{:?}\", \"status\": \"OK\", \"vpn\": {} }}",
-        request_type, cfg.vpn_enabled
+         {}",
+        content.len(),
+        cfg.allow_methods.join(", "),
+        method,
+        cfg.vpn_enabled,
+        content
     );
     
     socket.write_all(response.as_bytes()).await?;
-    info!("📨 Resposta JSON enviada");
+    info!("📨 Resposta enviada para método {}", method);
     Ok(())
 }
 
@@ -201,17 +197,20 @@ pub async fn handle_direct(mut socket: TcpStream, cfg: &Config) -> io::Result<()
          Content-Type: text/plain\r\n\
          Content-Length: {}\r\n\
          X-Protocol-Support: websocket,http11,http2,grpc\r\n\
+         X-Allowed-Methods: {}\r\n\
          X-Multistatus: 207 Multi-Status\r\n\
+         X-Mode: security\r\n\
          \r\n\
          {}",
         cfg.status.len(),
+        cfg.allow_methods.join(", "),
         cfg.status
     );
     socket.write_all(response.as_bytes()).await?;
     Ok(())
 }
 
-// Mantém a função original para compatibilidade
+// Mantém compatibilidade
 pub async fn handle_websocket(socket: TcpStream, cfg: &Config) -> io::Result<()> {
-    handle_multiprotocol_websocket(socket, cfg).await
+    handle_multiprotocol_request(socket, cfg, "GET").await
 }
