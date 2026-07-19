@@ -4,8 +4,7 @@ use anyhow::Result;
 use log::info;
 
 pub async fn handle_tcp(mut socket: TcpStream) -> Result<()> {
-    info!("📦 TCP Fallback connection");
+    info!("📦 TCP Fallback");
     socket.write_all(b"TCP OK\n").await?;
-    info!("✅ TCP response sent");
     Ok(())
 }
