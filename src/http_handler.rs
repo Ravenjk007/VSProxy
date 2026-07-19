@@ -112,7 +112,7 @@ fn generate_response(method: &str, path: &str, is_websocket: bool, is_connect: b
     } else if method == "HEAD" {
         format!(
             "HTTP/1.1 200 OK\r\n\
-             Server: BSProxy\r\n\
+             Server: VSProxy\r\n\
              Content-Length: 0\r\n\
              Connection: keep-alive\r\n\
              \r\n"
@@ -120,7 +120,7 @@ fn generate_response(method: &str, path: &str, is_websocket: bool, is_connect: b
     } else if method == "OPTIONS" {
         format!(
             "HTTP/1.1 204 No Content\r\n\
-             Server: BSProxy\r\n\
+             Server: VSProxy\r\n\
              Allow: GET, POST, PUT, DELETE, PATCH, HEAD, CONNECT, OPTIONS, TRACE\r\n\
              Connection: keep-alive\r\n\
              \r\n"
@@ -133,7 +133,7 @@ fn generate_response(method: &str, path: &str, is_websocket: bool, is_connect: b
         
         format!(
             "HTTP/1.1 200 OK\r\n\
-             Server: BSProxy\r\n\
+             Server: VSProxy\r\n\
              Content-Type: text/plain\r\n\
              Content-Length: {}\r\n\
              Connection: keep-alive\r\n\
